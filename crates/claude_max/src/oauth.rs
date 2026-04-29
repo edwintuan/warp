@@ -123,14 +123,23 @@ async fn parse_token_response(resp: reqwest::Response) -> Result<OAuthTokens> {
     Ok(OAuthTokens::from_response(parsed, Utc::now()))
 }
 
-/// Anthropic's callback page often shows the code as `<code>#<state>`. Some
-/// users paste only the code, others paste the whole thing. Tolerate both.
+/// Anthropic's callback page often shows the code as `<code>#<state>`, or the
+/// user may have copied an entire callback URL. Tolerate any of:
+///   - `abc123`
+///   - `abc123#state_value`
+///   - `abc123&extra=params`
+///   - `abc123#state_value&extra=params`
+///
+/// Mirrors craft-agents-oss's cleanup: split on `#` first, then on `&`.
 fn split_code_and_state(input: &str) -> (&str, Option<&str>) {
     let trimmed = input.trim();
-    match trimmed.split_once('#') {
-        Some((code, state)) => (code, Some(state)),
+    let (code_with_amp, state_with_amp) = match trimmed.split_once('#') {
+        Some((code, rest)) => (code, Some(rest)),
         None => (trimmed, None),
-    }
+    };
+    let code = code_with_amp.split('&').next().unwrap_or(code_with_amp);
+    let state = state_with_amp.map(|s| s.split('&').next().unwrap_or(s));
+    (code, state)
 }
 
 #[cfg(test)]
@@ -164,9 +173,19 @@ mod tests {
     }
 
     #[test]
-    fn split_code_handles_both_forms() {
+    fn split_code_handles_all_forms() {
         assert_eq!(split_code_and_state("abc"), ("abc", None));
         assert_eq!(split_code_and_state("abc#xyz"), ("abc", Some("xyz")));
         assert_eq!(split_code_and_state("  abc#xyz  "), ("abc", Some("xyz")));
+        assert_eq!(
+            split_code_and_state("abc&extra=1"),
+            ("abc", None),
+            "drop trailing query params after the code",
+        );
+        assert_eq!(
+            split_code_and_state("abc#xyz&extra=1"),
+            ("abc", Some("xyz")),
+            "drop trailing query params after the state",
+        );
     }
 }
