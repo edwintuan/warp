@@ -21,11 +21,15 @@ sha2 = "0.10"
 thiserror.workspace = true
 url.workspace = true
 
-[dev-dependencies]
+# Bin-only dependencies. Pulled in unconditionally because cargo doesn't
+# distinguish bin deps from lib deps; the tradeoff is small (~3 crates).
+clap.workspace = true
 rustls = { workspace = true, features = ["ring"] }
-tempfile.workspace = true
 tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
 
-[[example]]
-name = "smoke"
-path = "examples/smoke.rs"
+[dev-dependencies]
+tempfile.workspace = true
+
+[[bin]]
+name = "claude-max"
+path = "src/bin/claude_max.rs"

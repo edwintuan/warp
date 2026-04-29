@@ -1,32 +1,37 @@
 //! Direct-to-Anthropic harness using a Claude.ai Pro/Max OAuth token.
 //!
-//! Unlike `claude_code` and `gemini`, this harness does NOT spawn an external
-//! CLI subprocess. It speaks directly to `api.anthropic.com/v1/messages` via
-//! the [`claude_max`] crate, using OAuth tokens stored in the platform
-//! keychain (see [`crate::ai::claude_max_glue`]).
+//! Unlike `claude_code` and `gemini`, this harness does not invoke a third-
+//! party CLI shipped by another vendor. Instead it shells out to
+//! `claude-max`, the small companion binary built from
+//! `crates/claude_max/src/bin/claude_max.rs`. That binary owns the OAuth
+//! flow, token storage, the policy-bypass system-prompt prefix, and the
+//! Anthropic SSE streaming. The harness's job is just to plumb a Warp
+//! terminal block into it.
 //!
-//! ## Phase 2b status: scaffold only
+//! Lifecycle:
+//!   1. `validate()` ensures `claude-max` is on PATH (install with
+//!      `cargo install --path crates/claude_max`).
+//!   2. `build_runner()` writes the prompt (and optional system prompt)
+//!      to temp files, builds a shell command of the form
+//!      `claude-max chat @prompt -s @sys`, and stages a runner that owns
+//!      the temp files for cleanup.
+//!   3. `start()` calls `TerminalDriver::execute_command(...)`. Output
+//!      streams into a Warp block exactly like Claude/Gemini CLI.
 //!
-//! This file wires the harness into [`super::harness_kind`] dispatch and
-//! satisfies the [`ThirdPartyHarness`] / [`HarnessRunner`] traits enough for
-//! the workspace to build. The runner's `start` is intentionally
-//! `unimplemented!()`: actually pumping the Anthropic SSE stream into Warp's
-//! [`AgentDriver`] event protocol requires bridging work that is deferred to
-//! Phase 2c.
-//!
-//! ## Why a stub anyway?
-//!
-//! Landing the dispatch hook now means: (a) [`Harness::ClaudeMaxDirect`] is
-//! a real route, not a placeholder; (b) the build verifies all match arms
-//! over `Harness` are exhaustive; (c) Phase 2c can fill in `start` without
-//! touching the trait surface or dispatch.
+//! ⚠️ Anthropic's policy restricts Pro/Max OAuth tokens to Claude Code and
+//! Claude.ai. Use elsewhere is at the operator's risk; the runner makes no
+//! effort to hide what it's doing.
 
+use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Arc;
 
 use anyhow::Result;
 use async_trait::async_trait;
+use parking_lot::Mutex;
+use tempfile::NamedTempFile;
 use warp_cli::agent::Harness;
+use warp_managed_secrets::ManagedSecretValue;
 use warpui::{ModelHandle, ModelSpawner};
 
 use crate::ai::ambient_agents::AmbientAgentTaskId;
@@ -35,7 +40,18 @@ use crate::terminal::CLIAgent;
 
 use super::super::terminal::{CommandHandle, TerminalDriver};
 use super::super::{AgentDriver, AgentDriverError};
-use super::{HarnessRunner, ResumePayload, SavePoint, ThirdPartyHarness};
+use super::{
+    validate_cli_installed, write_temp_file, HarnessRunner, ResumePayload, SavePoint,
+    ThirdPartyHarness,
+};
+
+/// Name of the companion binary we shell out to. Built from
+/// `crates/claude_max`; users install it with
+/// `cargo install --path crates/claude_max`.
+const CLAUDE_MAX_BIN: &str = "claude-max";
+
+const INSTALL_DOCS: &str =
+    "Install with: `cargo install --path crates/claude_max` from a Warp checkout.";
 
 pub(crate) struct ClaudeMaxDirectHarness;
 
@@ -46,62 +62,117 @@ impl ThirdPartyHarness for ClaudeMaxDirectHarness {
         Harness::ClaudeMaxDirect
     }
 
-    /// We share Claude's display assets — same vendor, same logo. The lack of
-    /// a dedicated `CLIAgent::ClaudeMaxDirect` variant is intentional: that
-    /// enum models *external* CLI agents, which we are not.
+    /// Reuses Claude's display assets — same vendor, same logo. The
+    /// `CLIAgent` enum models *external* CLI tools and `Claude` is the
+    /// closest fit; we don't add a dedicated variant because that enum
+    /// drives a lot of unrelated UI plumbing we don't need.
     fn cli_agent(&self) -> CLIAgent {
         CLIAgent::Claude
     }
 
-    /// No CLI to validate. Token presence is checked at runtime by the
-    /// runner; that produces a more actionable error than a setup-phase
-    /// "missing on PATH" message would.
-    fn validate(&self) -> Result<(), AgentDriverError> {
-        Ok(())
+    fn install_docs_url(&self) -> Option<&'static str> {
+        // Not a URL — `validate_cli_installed` only ever embeds it in a
+        // user-facing error string, so a one-line install command is more
+        // useful than a docs link.
+        Some(INSTALL_DOCS)
     }
 
-    /// No on-disk config to stage — the OAuth token lives in keychain.
+    fn validate(&self) -> Result<(), AgentDriverError> {
+        validate_cli_installed(CLAUDE_MAX_BIN, self.install_docs_url())
+    }
+
+    /// Nothing to stage on disk — `claude-max` reads tokens from its own
+    /// keychain/file path, and the prompt/system-prompt are passed via
+    /// args on the build_runner side.
     fn prepare_environment_config(
         &self,
         _working_dir: &Path,
         _system_prompt: Option<&str>,
-        _secrets: &std::collections::HashMap<String, warp_managed_secrets::ManagedSecretValue>,
+        _secrets: &HashMap<String, ManagedSecretValue>,
     ) -> Result<(), AgentDriverError> {
         Ok(())
     }
 
     fn build_runner(
         &self,
-        _prompt: &str,
-        _system_prompt: Option<&str>,
+        prompt: &str,
+        system_prompt: Option<&str>,
         _resumption_prompt: Option<&str>,
         _working_dir: &Path,
         _task_id: Option<AmbientAgentTaskId>,
         _server_api: Arc<ServerApi>,
-        _terminal_driver: ModelHandle<TerminalDriver>,
+        terminal_driver: ModelHandle<TerminalDriver>,
         _resume: Option<ResumePayload>,
     ) -> Result<Box<dyn HarnessRunner>, AgentDriverError> {
-        Ok(Box::new(ClaudeMaxDirectRunner))
+        Ok(Box::new(ClaudeMaxDirectRunner::new(
+            prompt,
+            system_prompt,
+            terminal_driver,
+        )?))
     }
 }
 
-pub(crate) struct ClaudeMaxDirectRunner;
+pub(crate) struct ClaudeMaxDirectRunner {
+    command: String,
+    /// Held so the temp files are cleaned up only when the runner is
+    /// dropped — not when `build_runner` returns.
+    _prompt_file: NamedTempFile,
+    _system_prompt_file: Option<NamedTempFile>,
+    terminal_driver: ModelHandle<TerminalDriver>,
+    block_id: Mutex<Option<crate::terminal::model::block::BlockId>>,
+}
+
+impl ClaudeMaxDirectRunner {
+    fn new(
+        prompt: &str,
+        system_prompt: Option<&str>,
+        terminal_driver: ModelHandle<TerminalDriver>,
+    ) -> Result<Self, AgentDriverError> {
+        let prompt_file = write_temp_file("claude_max_prompt_", prompt)?;
+        let prompt_path = prompt_file.path().display().to_string();
+
+        let (system_prompt_file, system_arg) = match system_prompt {
+            Some(sp) if !sp.trim().is_empty() => {
+                let f = write_temp_file("claude_max_system_", sp)?;
+                let p = f.path().display().to_string();
+                (Some(f), format!(" -s '{p}'"))
+            }
+            _ => (None, String::new()),
+        };
+
+        // The `@` prefix tells `claude-max chat` to read the prompt from a
+        // file. Quoting paths handles spaces; Warp's terminal runs commands
+        // through a shell so quoting is important.
+        let command = format!("{CLAUDE_MAX_BIN} chat '@{prompt_path}'{system_arg}");
+
+        Ok(Self {
+            command,
+            _prompt_file: prompt_file,
+            _system_prompt_file: system_prompt_file,
+            terminal_driver,
+            block_id: Mutex::new(None),
+        })
+    }
+}
 
 #[cfg_attr(not(target_family = "wasm"), async_trait)]
 #[cfg_attr(target_family = "wasm", async_trait(?Send))]
 impl HarnessRunner for ClaudeMaxDirectRunner {
-    /// Phase 2c will: (1) load tokens via `claude_max_glue::load_tokens`,
-    /// refreshing if expired; (2) construct an `AnthropicClient`; (3) call
-    /// `stream_messages` with a `SystemPrompt::with_identity_prefix(...)` so
-    /// the OAuth-Max policy fingerprint is satisfied; (4) translate
-    /// `StreamEvent::ContentBlockDelta` events into terminal block writes
-    /// driven through `terminal_driver`, returning a `CommandHandle` that
-    /// resolves on `MessageStop`.
     async fn start(
         &self,
-        _foreground: &ModelSpawner<AgentDriver>,
+        foreground: &ModelSpawner<AgentDriver>,
     ) -> Result<CommandHandle, AgentDriverError> {
-        unimplemented!("claude_max_direct runner: SSE stream → terminal block bridge is Phase 2c")
+        let command = self.command.clone();
+        let terminal_driver = self.terminal_driver.clone();
+        let command_handle = foreground
+            .spawn(move |_, ctx| {
+                terminal_driver.update(ctx, |driver, ctx| driver.execute_command(&command, ctx))
+            })
+            .await??
+            .await?;
+
+        *self.block_id.lock() = Some(command_handle.block_id().clone());
+        Ok(command_handle)
     }
 
     async fn save_conversation(
@@ -109,13 +180,14 @@ impl HarnessRunner for ClaudeMaxDirectRunner {
         _save_point: SavePoint,
         _foreground: &ModelSpawner<AgentDriver>,
     ) -> Result<()> {
-        // Phase 2c: persist via crates/persistence (or skip — direct mode
-        // may be one-shot only initially).
+        // Direct mode is one-shot: each chat is its own block, the
+        // transcript lives in the terminal's regular block history. No
+        // server-side conversation record to upload.
         Ok(())
     }
 
     async fn exit(&self, _foreground: &ModelSpawner<AgentDriver>) -> Result<()> {
-        // Nothing to gracefully shut down yet — no streams or tasks owned.
+        // The bin exits naturally on `MessageStop`; nothing to send.
         Ok(())
     }
 }
