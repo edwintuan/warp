@@ -89,6 +89,10 @@ pub enum LLMProvider {
     Anthropic,
     Google,
     Xai,
+    /// Direct connection to api.anthropic.com using a Claude.ai Pro/Max
+    /// OAuth token, bypassing warp-server. Gated by
+    /// `FeatureFlag::ClaudeMaxDirectMode`. See `crates/claude_max/`.
+    ClaudeMaxDirect,
     Unknown,
 }
 
@@ -100,6 +104,7 @@ impl LLMProvider {
             LLMProvider::Anthropic => Some(Icon::ClaudeLogo),
             LLMProvider::Google => Some(Icon::GeminiLogo),
             LLMProvider::Xai => None,
+            LLMProvider::ClaudeMaxDirect => Some(Icon::ClaudeLogo),
             LLMProvider::Unknown => None,
         }
     }

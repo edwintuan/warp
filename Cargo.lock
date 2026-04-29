@@ -309,6 +309,7 @@ dependencies = [
  "bytes",
  "cfg-if",
  "chrono",
+ "claude_max",
  "computer_use",
  "derivative",
  "dirs 6.0.0",

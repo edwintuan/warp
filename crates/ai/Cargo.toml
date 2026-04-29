@@ -69,6 +69,7 @@ nix.workspace = true
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 async-fs.workspace = true
 arborium.workspace = true
+claude_max.workspace = true
 languages.workspace = true
 syntax_tree.workspace = true
 tokio = { workspace = true, features = ["rt-multi-thread"] }

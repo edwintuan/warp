@@ -837,6 +837,15 @@ pub enum FeatureFlag {
     /// `base_model_context_window_limit` is not sent on outbound requests, so
     /// the server falls back to its default.
     ConfigurableContextWindow,
+
+    /// Enables routing AI requests directly to api.anthropic.com using a
+    /// Claude.ai Pro/Max OAuth token, bypassing warp-server. See
+    /// `crates/claude_max/` for the OAuth + streaming client. Off by default.
+    ///
+    /// Note: Anthropic's "Authentication and credential use" policy
+    /// restricts these tokens to Claude Code and Claude.ai. Using them
+    /// elsewhere is at the operator's risk.
+    ClaudeMaxDirectMode,
 }
 
 static FLAG_STATES: [AtomicBool; cardinality::<FeatureFlag>()] =
