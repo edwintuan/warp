@@ -253,7 +253,14 @@ fn run_agent(
             if args.skill.is_some() && !FeatureFlag::OzPlatformSkills.is_enabled() {
                 return Err(anyhow::anyhow!("unexpected argument '--skill' found"));
             }
-            if args.harness != Harness::Oz && !FeatureFlag::AgentHarness.is_enabled() {
+            // ClaudeMaxDirect is exempt from the AgentHarness flag: it doesn't
+            // share warp-server agent infra at all, so gating it behind the
+            // same flag as Claude/Gemini would only hide a feature that has
+            // nothing to gate on.
+            if args.harness != Harness::Oz
+                && args.harness != Harness::ClaudeMaxDirect
+                && !FeatureFlag::AgentHarness.is_enabled()
+            {
                 return Err(anyhow::anyhow!("unexpected argument '--harness' found"));
             }
             if args.harness == Harness::OpenCode {
@@ -297,7 +304,14 @@ fn run_agent(
                     "unexpected argument '--conversation' found"
                 ));
             }
-            if args.harness != Harness::Oz && !FeatureFlag::AgentHarness.is_enabled() {
+            // ClaudeMaxDirect is exempt from the AgentHarness flag: it doesn't
+            // share warp-server agent infra at all, so gating it behind the
+            // same flag as Claude/Gemini would only hide a feature that has
+            // nothing to gate on.
+            if args.harness != Harness::Oz
+                && args.harness != Harness::ClaudeMaxDirect
+                && !FeatureFlag::AgentHarness.is_enabled()
+            {
                 return Err(anyhow::anyhow!("unexpected argument '--harness' found"));
             }
             if args.claude_auth_secret.is_some() && args.harness != Harness::Claude {
@@ -544,20 +558,28 @@ impl AgentDriverRunner {
         server_api: Arc<dyn AIClient>,
         output_format: OutputFormat,
     ) -> Result<(), AgentDriverError> {
-        // Ensure we've synced team state before starting the driver.
-        Self::refresh_team_metadata(&foreground).await?;
+        let is_direct_mode = args.harness == Harness::ClaudeMaxDirect;
 
-        // Wait for Warp Drive to sync before building the task config, since
-        // prompt resolution (SavedPrompt -> workflow lookup) and environment
-        // resolution (CloudAmbientAgentEnvironment lookup) depend on it.
-        if foreground
-            .spawn(|_, ctx| common::refresh_warp_drive(ctx))
-            .await?
-            .await
-            .is_err()
-        {
-            return Err(AgentDriverError::WarpDriveSyncFailed);
+        if !is_direct_mode {
+            // Ensure we've synced team state before starting the driver.
+            Self::refresh_team_metadata(&foreground).await?;
+
+            // Wait for Warp Drive to sync before building the task config, since
+            // prompt resolution (SavedPrompt -> workflow lookup) and environment
+            // resolution (CloudAmbientAgentEnvironment lookup) depend on it.
+            if foreground
+                .spawn(|_, ctx| common::refresh_warp_drive(ctx))
+                .await?
+                .await
+                .is_err()
+            {
+                return Err(AgentDriverError::WarpDriveSyncFailed);
+            }
         }
+        // ClaudeMaxDirect skips both server-side syncs: it doesn't talk to
+        // warp-server at all, and prompt/environment resolution paths it
+        // would otherwise feed don't apply (no SavedPrompt lookup, no cloud
+        // environment).
 
         // Extract the task ID if available, so that if there are setup errors and we have
         // a server-provided task ID, we can report them. If we create a task for a local CLI
@@ -1245,6 +1267,12 @@ impl AgentDriverRunner {
 fn command_requires_auth(command: &CliCommand) -> bool {
     match command {
         CliCommand::Agent(agent_cmd) => match agent_cmd {
+            // ClaudeMaxDirect bypasses warp-server entirely (it talks straight
+            // to api.anthropic.com via the user's Pro/Max OAuth token), so
+            // requiring a warp-server login here is wrong: it would block
+            // exactly the users who chose this harness *because* they don't
+            // want to authenticate to warp-server.
+            AgentCommand::Run(args) if args.harness == Harness::ClaudeMaxDirect => false,
             AgentCommand::Run { .. } => true,
             AgentCommand::RunCloud { .. } => true,
             AgentCommand::Profile(sub) => match sub {

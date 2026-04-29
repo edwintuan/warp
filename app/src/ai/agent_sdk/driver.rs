@@ -497,7 +497,11 @@ impl AgentDriver {
 
         // If we're not logged in, the root view will go to an auth screen, and all subsequent steps will fail.
         // This should be impossible, since we enforce login before reaching this point.
-        if !AuthStateProvider::as_ref(ctx).get().is_logged_in() {
+        // Exception: ClaudeMaxDirect bypasses warp-server entirely (it streams via the
+        // user's Anthropic OAuth token), so a missing warp-server login is expected and fine.
+        if selected_harness != warp_cli::agent::Harness::ClaudeMaxDirect
+            && !AuthStateProvider::as_ref(ctx).get().is_logged_in()
+        {
             return Err(AgentDriverError::NotLoggedIn);
         }
 
