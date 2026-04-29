@@ -1,6 +1,8 @@
 pub mod agent;
 pub mod api_keys;
 pub mod aws_credentials;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod claude_max;
 pub mod llm_id;
 
 pub use llm_id::LLMId;

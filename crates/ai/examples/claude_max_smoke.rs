@@ -1,0 +1,140 @@
+//! End-to-end smoke test for `ai::claude_max`.
+//!
+//! Run:
+//! ```
+//! # First time: do the OAuth flow.
+//! cargo run -p ai --example claude_max_smoke -- login
+//!
+//! # Then send a one-shot prompt (uses cached tokens).
+//! cargo run -p ai --example claude_max_smoke -- chat "Say hi in one word."
+//!
+//! # Wipe the saved token.
+//! cargo run -p ai --example claude_max_smoke -- logout
+//! ```
+//!
+//! Tokens are stored at `$XDG_CONFIG_HOME/warp-claude-max/tokens.json` with
+//! mode 0600 (Unix). They are NOT encrypted — this is for development only.
+
+use std::io::{self, BufRead, Write};
+
+use ai::claude_max::{
+    exchange_code,
+    messages::{ContentBlock, Delta, Message, MessagesRequest, Role, StreamEvent},
+    refresh, start, AnthropicClient, AuthFlow, ClaudeMaxError, FileTokenStore, OAuthTokens, Result,
+    TokenStore,
+};
+use futures::StreamExt;
+use reqwest::Client;
+
+const DEFAULT_MODEL: &str = "claude-sonnet-4-5-20250929";
+
+#[tokio::main]
+async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
+    let args: Vec<String> = std::env::args().collect();
+    let cmd = args.get(1).map(String::as_str).unwrap_or("help");
+    let store = FileTokenStore::new(FileTokenStore::default_path()?);
+    let http = Client::builder().build()?;
+
+    match cmd {
+        "login" => login(&http, &store).await?,
+        "chat" => {
+            let prompt = args
+                .get(2)
+                .cloned()
+                .unwrap_or_else(|| "Reply with the single word: pong.".to_string());
+            chat(&http, &store, &prompt).await?
+        }
+        "logout" => {
+            store.clear()?;
+            println!("Cleared stored tokens.");
+        }
+        _ => print_help(),
+    }
+    Ok(())
+}
+
+fn print_help() {
+    eprintln!("subcommands: login | chat <prompt> | logout");
+}
+
+async fn login(http: &Client, store: &dyn TokenStore) -> Result<()> {
+    let flow: AuthFlow = start()?;
+    println!("Open this URL in your browser, sign in to Claude, and approve:");
+    println!();
+    println!("  {}", flow.authorize_url);
+    println!();
+    print!("Paste the code shown on the callback page (with or without #state suffix): ");
+    io::stdout().flush().ok();
+
+    let mut line = String::new();
+    io::stdin().lock().read_line(&mut line)?;
+
+    let tokens = exchange_code(http, &flow, &line).await?;
+    store.save(&tokens)?;
+    println!(
+        "Stored tokens (access_token len={}).",
+        tokens.access_token.len()
+    );
+    Ok(())
+}
+
+async fn chat(http: &Client, store: &dyn TokenStore, prompt: &str) -> Result<()> {
+    let tokens = ensure_fresh_tokens(http, store).await?;
+    let client = AnthropicClient::new(http.clone());
+
+    let req = MessagesRequest {
+        model: DEFAULT_MODEL.into(),
+        max_tokens: 256,
+        messages: vec![Message {
+            role: Role::User,
+            content: vec![ContentBlock::text(prompt)],
+        }],
+        system: Some(default_system_prompt().into()),
+        temperature: None,
+        stream: true,
+    };
+
+    let mut stream = client.stream_messages(&tokens.access_token, req)?;
+    while let Some(event) = stream.next().await {
+        match event? {
+            StreamEvent::ContentBlockDelta {
+                delta: Delta::Text { text },
+                ..
+            } => {
+                print!("{text}");
+                io::stdout().flush().ok();
+            }
+            StreamEvent::MessageStop => {
+                println!();
+                break;
+            }
+            StreamEvent::Error { error } => {
+                eprintln!("\n[anthropic error] {}: {}", error.kind, error.message);
+                break;
+            }
+            _ => {}
+        }
+    }
+    Ok(())
+}
+
+async fn ensure_fresh_tokens(http: &Client, store: &dyn TokenStore) -> Result<OAuthTokens> {
+    let tokens = store
+        .load()?
+        .ok_or_else(|| ClaudeMaxError::MissingRefreshToken)?;
+    if !tokens.is_expired(chrono::Utc::now()) {
+        return Ok(tokens);
+    }
+    let rt = tokens
+        .refresh_token
+        .as_deref()
+        .ok_or(ClaudeMaxError::MissingRefreshToken)?;
+    let new = refresh(http, rt).await?;
+    store.save(&new)?;
+    Ok(new)
+}
+
+fn default_system_prompt() -> &'static str {
+    "You are a helpful assistant connected directly to a developer's terminal. \
+     Keep replies concise unless asked otherwise."
+}
