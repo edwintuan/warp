@@ -75,6 +75,8 @@ async fn login(http: &Client, store: &dyn TokenStore) -> Result<()> {
     let mut line = String::new();
     io::stdin().lock().read_line(&mut line)?;
 
+    diagnose_pasted_input(&line);
+
     let tokens = exchange_code(http, &flow, &line).await?;
     store.save(&tokens)?;
     println!(
@@ -82,6 +84,47 @@ async fn login(http: &Client, store: &dyn TokenStore) -> Result<()> {
         tokens.access_token.len()
     );
     Ok(())
+}
+
+/// Print a sanitized summary of what was pasted. Exposes structural problems
+/// (empty input, accidental URL paste, control characters) without revealing
+/// the secret value itself.
+fn diagnose_pasted_input(raw: &str) {
+    let trimmed = raw.trim();
+    let len = trimmed.chars().count();
+    let has_hash = trimmed.contains('#');
+    let has_space = trimmed.contains(char::is_whitespace);
+    let has_slash = trimmed.contains('/');
+    let has_eq = trimmed.contains('=');
+    let starts_with = trimmed.chars().take(4).collect::<String>();
+    let ends_with = trimmed
+        .chars()
+        .rev()
+        .take(4)
+        .collect::<String>()
+        .chars()
+        .rev()
+        .collect::<String>();
+    let control_chars = trimmed.chars().filter(|c| c.is_control()).count();
+
+    eprintln!(
+        "[diag] pasted input: len={len} has_hash={has_hash} has_whitespace={has_space} \
+         has_slash={has_slash} has_eq={has_eq} control_chars={control_chars} \
+         starts_with={starts_with:?} ends_with={ends_with:?}"
+    );
+    if len == 0 {
+        eprintln!("[diag] WARNING: empty input — nothing was pasted.");
+    }
+    if has_slash || has_eq {
+        eprintln!(
+            "[diag] WARNING: input looks like a URL or query string. \
+             Paste only the short code shown on the callback page \
+             (something like 'abc123def#xyz789'), not the full callback URL."
+        );
+    }
+    if has_space {
+        eprintln!("[diag] WARNING: whitespace inside input — likely contains stray characters.");
+    }
 }
 
 async fn chat(http: &Client, store: &dyn TokenStore, prompt: &str) -> Result<()> {
