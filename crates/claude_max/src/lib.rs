@@ -1,6 +1,6 @@
 //! Direct connection to Anthropic via Claude Max OAuth.
 //!
-//! This module bypasses Warp's cloud server (`warp-server`) and talks to
+//! This crate bypasses Warp's cloud server (`warp-server`) and talks to
 //! `api.anthropic.com` directly using an OAuth token obtained from a
 //! `claude.ai` Free/Pro/Max subscription.
 //!
@@ -16,9 +16,9 @@
 //! - [`messages`]: `/v1/messages` request + streaming event types.
 //! - [`client`]: streaming HTTP client.
 //!
-//! ### Phase 1 (this module): chat-only, no tools.
-//! ### Phase 2 (todo): tool_use blocks, MCP bridging, AgentConversationsModel
-//!                     wiring, settings UI.
+//! ### Phase 1 (current): chat-only, no tools.
+//!
+//! ### Phase 2 (todo): tool_use blocks, MCP bridging, AgentConversationsModel wiring, settings UI.
 
 pub mod client;
 pub mod config;

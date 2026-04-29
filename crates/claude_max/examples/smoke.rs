@@ -1,15 +1,15 @@
-//! End-to-end smoke test for `ai::claude_max`.
+//! End-to-end smoke test for `claude_max`.
 //!
 //! Run:
 //! ```
 //! # First time: do the OAuth flow.
-//! cargo run -p ai --example claude_max_smoke -- login
+//! cargo run -p claude_max --example smoke -- login
 //!
 //! # Then send a one-shot prompt (uses cached tokens).
-//! cargo run -p ai --example claude_max_smoke -- chat "Say hi in one word."
+//! cargo run -p claude_max --example smoke -- chat "Say hi in one word."
 //!
 //! # Wipe the saved token.
-//! cargo run -p ai --example claude_max_smoke -- logout
+//! cargo run -p claude_max --example smoke -- logout
 //! ```
 //!
 //! Tokens are stored at `$XDG_CONFIG_HOME/warp-claude-max/tokens.json` with
@@ -17,7 +17,7 @@
 
 use std::io::{self, BufRead, Write};
 
-use ai::claude_max::{
+use claude_max::{
     exchange_code,
     messages::{ContentBlock, Delta, Message, MessagesRequest, Role, StreamEvent},
     refresh, start, AnthropicClient, AuthFlow, ClaudeMaxError, FileTokenStore, OAuthTokens, Result,
@@ -30,6 +30,12 @@ const DEFAULT_MODEL: &str = "claude-sonnet-4-5-20250929";
 
 #[tokio::main]
 async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
+    // Workspace's reqwest uses `rustls-tls-native-roots-no-provider`; we have
+    // to install a crypto provider ourselves before any TLS handshake.
+    rustls::crypto::ring::default_provider()
+        .install_default()
+        .ok();
+
     let args: Vec<String> = std::env::args().collect();
     let cmd = args.get(1).map(String::as_str).unwrap_or("help");
     let store = FileTokenStore::new(FileTokenStore::default_path()?);

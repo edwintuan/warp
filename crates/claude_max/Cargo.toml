@@ -1,0 +1,31 @@
+[package]
+name = "claude_max"
+version = "0.1.0"
+edition = "2021"
+publish.workspace = true
+license.workspace = true
+description = "Direct Anthropic /v1/messages client using Claude Max OAuth tokens."
+
+[dependencies]
+async-stream.workspace = true
+base64.workspace = true
+chrono.workspace = true
+dirs.workspace = true
+futures.workspace = true
+rand.workspace = true
+reqwest.workspace = true
+reqwest-eventsource.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2 = "0.10"
+thiserror.workspace = true
+url.workspace = true
+
+[dev-dependencies]
+rustls = { workspace = true, features = ["ring"] }
+tempfile.workspace = true
+tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
+
+[[example]]
+name = "smoke"
+path = "examples/smoke.rs"

@@ -63,11 +63,6 @@ repo_metadata.workspace = true
 uuid.workspace = true
 unicode-width.workspace = true
 
-# claude_max direct mode shares these constants/types across platforms.
-base64.workspace = true
-rand.workspace = true
-url.workspace = true
-
 [target.'cfg(unix)'.dependencies]
 nix.workspace = true
 
@@ -79,10 +74,6 @@ syntax_tree.workspace = true
 tokio = { workspace = true, features = ["rt-multi-thread"] }
 watcher.workspace = true
 notify-debouncer-full.workspace = true
-# claude_max direct mode (Phase 1: chat-only) — non-wasm only.
-async-stream.workspace = true
-reqwest.workspace = true
-reqwest-eventsource.workspace = true
 
 [dev-dependencies]
 filetime = "0.2.25"

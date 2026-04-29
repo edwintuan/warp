@@ -303,10 +303,8 @@ dependencies = [
  "arborium",
  "async-channel",
  "async-fs",
- "async-stream",
  "async-trait",
  "base16ct",
- "base64 0.22.1",
  "bincode",
  "bytes",
  "cfg-if",
@@ -330,12 +328,9 @@ dependencies = [
  "persistence",
  "priority-queue",
  "prost-types",
- "rand 0.8.5",
  "rayon",
  "regex",
  "repo_metadata",
- "reqwest",
- "reqwest-eventsource",
  "rmcp",
  "sentry",
  "serde",
@@ -354,7 +349,6 @@ dependencies = [
  "tokio",
  "typed-path 0.10.0",
  "unicode-width 0.1.14",
- "url",
  "uuid",
  "virtual-fs",
  "warp_core",
@@ -2764,6 +2758,28 @@ name = "clap_lex"
 version = "0.7.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b94f61472cee1439c0b966b47e3aca9ae07e45d070759512cd390ea2bebc6675"
+
+[[package]]
+name = "claude_max"
+version = "0.1.0"
+dependencies = [
+ "async-stream",
+ "base64 0.22.1",
+ "chrono",
+ "dirs 6.0.0",
+ "futures",
+ "rand 0.8.5",
+ "reqwest",
+ "reqwest-eventsource",
+ "rustls 0.23.39",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tempfile",
+ "thiserror 2.0.17",
+ "tokio",
+ "url",
+]
 
 [[package]]
 name = "clipboard-win"
