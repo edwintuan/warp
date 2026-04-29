@@ -35,11 +35,13 @@ use super::{
 };
 
 mod claude_code;
+mod claude_max_direct;
 pub(crate) mod claude_transcript;
 mod gemini;
 mod json_utils;
 
 pub(crate) use claude_code::ClaudeHarness;
+use claude_max_direct::ClaudeMaxDirectHarness;
 use claude_transcript::ClaudeResumeInfo;
 use gemini::GeminiHarness;
 
@@ -167,6 +169,7 @@ pub(crate) fn harness_kind(harness: Harness) -> Result<HarnessKind, AgentDriverE
         Harness::Claude => Ok(HarnessKind::ThirdParty(Box::new(ClaudeHarness))),
         Harness::OpenCode => Ok(HarnessKind::Unsupported(Harness::OpenCode)),
         Harness::Gemini => Ok(HarnessKind::ThirdParty(Box::new(GeminiHarness))),
+        Harness::ClaudeMaxDirect => Ok(HarnessKind::ThirdParty(Box::new(ClaudeMaxDirectHarness))),
         Harness::Unknown => Err(AgentDriverError::InvalidRuntimeState),
     }
 }

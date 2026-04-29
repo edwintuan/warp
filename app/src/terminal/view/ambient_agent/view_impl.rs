@@ -492,6 +492,9 @@ impl TerminalView {
             Harness::Claude => matches!(cli_agent, CLIAgent::Claude),
             Harness::OpenCode => matches!(cli_agent, CLIAgent::OpenCode),
             Harness::Gemini => matches!(cli_agent, CLIAgent::Gemini),
+            // Claude Max direct mode is a built-in path, not an external CLI
+            // session — never matches an external CLI agent.
+            Harness::ClaudeMaxDirect => false,
             Harness::Unknown => false,
         }
     }
