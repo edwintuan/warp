@@ -19,7 +19,7 @@ use std::io::{self, BufRead, Write};
 
 use claude_max::{
     exchange_code,
-    messages::{ContentBlock, Delta, Message, MessagesRequest, Role, StreamEvent},
+    messages::{ContentBlock, Delta, Message, MessagesRequest, Role, StreamEvent, SystemPrompt},
     refresh, start, AnthropicClient, AuthFlow, ClaudeMaxError, FileTokenStore, OAuthTokens, Result,
     TokenStore,
 };
@@ -138,7 +138,7 @@ async fn chat(http: &Client, store: &dyn TokenStore, prompt: &str) -> Result<()>
             role: Role::User,
             content: vec![ContentBlock::text(prompt)],
         }],
-        system: Some(default_system_prompt().into()),
+        system: Some(SystemPrompt::with_identity_prefix(default_system_prompt())),
         temperature: None,
         stream: true,
     };

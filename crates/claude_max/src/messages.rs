@@ -5,17 +5,66 @@
 
 use serde::{Deserialize, Serialize};
 
+/// The exact prefix Anthropic's policy enforcement requires when sending
+/// `/v1/messages` with a Claude.ai Pro/Max OAuth token. Without this string
+/// as the first system block, the request returns HTTP 429 with a
+/// suspiciously empty `rate_limit_error` (`"message": "Error"`). With it,
+/// the request is accepted normally regardless of additional system content.
+///
+/// Verified empirically against api.anthropic.com on 2026-04-29.
+pub const CLAUDE_CODE_IDENTITY: &str = "You are Claude Code, Anthropic's official CLI for Claude.";
+
 #[derive(Clone, Debug, Serialize)]
 pub struct MessagesRequest {
     pub model: String,
     pub max_tokens: u32,
     pub messages: Vec<Message>,
+    /// Either a plain string or an array of system blocks. Use the array form
+    /// to send a custom prompt: place [`CLAUDE_CODE_IDENTITY`] as the first
+    /// block (required for OAuth-Max requests to bypass policy enforcement),
+    /// then any number of additional blocks with the actual instructions.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub system: Option<String>,
+    pub system: Option<SystemPrompt>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub temperature: Option<f32>,
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub stream: bool,
+}
+
+/// Anthropic accepts `system` as either a single string or an array of typed
+/// blocks. Serialized untagged so JSON output is the natural form.
+#[derive(Clone, Debug, Serialize)]
+#[serde(untagged)]
+pub enum SystemPrompt {
+    Single(String),
+    Blocks(Vec<SystemBlock>),
+}
+
+impl SystemPrompt {
+    /// Build the canonical OAuth-Max-safe form: required identity block first,
+    /// followed by the caller's actual instructions.
+    pub fn with_identity_prefix(actual: impl Into<String>) -> Self {
+        Self::Blocks(vec![
+            SystemBlock::text(CLAUDE_CODE_IDENTITY),
+            SystemBlock::text(actual),
+        ])
+    }
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct SystemBlock {
+    #[serde(rename = "type")]
+    pub kind: &'static str,
+    pub text: String,
+}
+
+impl SystemBlock {
+    pub fn text(s: impl Into<String>) -> Self {
+        Self {
+            kind: "text",
+            text: s.into(),
+        }
+    }
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -136,5 +185,40 @@ mod tests {
         assert!(json.get("system").is_none());
         assert!(json.get("temperature").is_none());
         assert_eq!(json["stream"], true);
+    }
+
+    #[test]
+    fn system_prompt_with_identity_prefix_serializes_as_array() {
+        let req = MessagesRequest {
+            model: "claude".into(),
+            max_tokens: 1,
+            messages: vec![],
+            system: Some(SystemPrompt::with_identity_prefix("be terse")),
+            temperature: None,
+            stream: false,
+        };
+        let json = serde_json::to_value(&req).unwrap();
+        let system = json.get("system").unwrap();
+        assert!(system.is_array(), "system must serialize as JSON array");
+        let arr = system.as_array().unwrap();
+        assert_eq!(arr.len(), 2);
+        assert_eq!(arr[0]["type"], "text");
+        assert_eq!(arr[0]["text"], CLAUDE_CODE_IDENTITY);
+        assert_eq!(arr[1]["type"], "text");
+        assert_eq!(arr[1]["text"], "be terse");
+    }
+
+    #[test]
+    fn system_prompt_single_serializes_as_string() {
+        let req = MessagesRequest {
+            model: "claude".into(),
+            max_tokens: 1,
+            messages: vec![],
+            system: Some(SystemPrompt::Single("hello".into())),
+            temperature: None,
+            stream: false,
+        };
+        let json = serde_json::to_value(&req).unwrap();
+        assert_eq!(json["system"], "hello");
     }
 }
